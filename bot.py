@@ -8,7 +8,7 @@ from functools import wraps
 from config import ADMIN_ID, TOKEN, REF_REWARD, CHANNELS
 import config
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton, InputMediaPhoto, InputMediaVideo
-
+from datetime import datetime, timedelta
 bot = telebot.TeleBot(TOKEN)
 
 DATA_FILE = 'users.json'
@@ -47,6 +47,7 @@ def is_subscribed(user_id):
 
 
 
+
 PROMO_FILE = 'promo.json'
 
 
@@ -75,9 +76,8 @@ def save_data(data):
 
 def get_main_menu():
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    markup.row("🎁 Открыть кейс", "⭐ Баланс")
-    markup.row("👥 Партнёрская программа", "🔑 Ввести промокод")
-    markup.row("💸 Вывести")
+    markup.row("⭐ Баланс","👥 Партнёрская программа", "💸 Вывести" )
+    markup.row("🔑 Ввести промокод", "📊 Топ рефералов", "🎁 Открыть кейс")
     return markup
 
 
@@ -701,6 +701,72 @@ def handle_withdraw(call):
     # Отправляем заявку админу
     admin_msg = f"Заявка на вывод:\nПользователь: @{call.from_user.username or call.from_user.id}\nID: {user_id}\nСумма: {amount}"
     bot.send_message(ADMIN_ID, admin_msg)
+
+
+@bot.message_handler(func=lambda message: message.text == "📊 Топ рефералов")
+def show_ref_top_periods(message):
+    markup = telebot.types.InlineKeyboardMarkup()
+    markup.add(
+        telebot.types.InlineKeyboardButton("🕒 24 часа", callback_data="top_24h"),
+        telebot.types.InlineKeyboardButton("📅 Неделя", callback_data="top_week"),
+    )
+    bot.send_message(message.chat.id, "Выберите период для отображения топа:", reply_markup=markup)
+
+def get_top_refs(days: int):
+    from datetime import datetime, timedelta
+
+    now = datetime.utcnow()
+    cutoff = now - timedelta(days=days)
+    with open("users.json", "r", encoding="utf-8") as f:
+        users = json.load(f)
+
+    counts = {}
+    for uid, data in users.items():
+        refs = data.get("refs", [])
+        count = 0
+        for ref in refs:
+            # ✅ Добавим защиту от старой структуры
+            if isinstance(ref, dict):
+                ts = ref.get("timestamp")
+                if ts:
+                    try:
+                        ref_time = datetime.fromisoformat(ts)
+                        if ref_time >= cutoff:
+                            count += 1
+                    except:
+                        continue
+            elif isinstance(ref, int):
+                # если это старый формат — считаем его без даты
+                count += 1
+        if count > 0:
+            counts[uid] = count
+
+    # сортируем по количеству
+    sorted_refs = sorted(counts.items(), key=lambda x: x[1], reverse=True)
+    return sorted_refs[:10]
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("top_"))
+def send_ref_top(call):
+    if call.data == "top_24h":
+        top = get_top_refs(24)
+        title = "🕒 Топ за 24 часа"
+    elif call.data == "top_week":
+        top = get_top_refs(24 * 7)
+        title = "📅 Топ за неделю"
+    else:
+        top = get_top_refs(None)
+        title = "📈 Топ за всё время"
+
+    if not top:
+        text = "Нет данных для отображения."
+    else:
+        text = f"{title}:\n\n"
+        for i, (uid, count) in enumerate(top, 1):
+            text += f"{i}. ID {uid} — {count} рефов\n"
+
+    bot.edit_message_text(text, chat_id=call.message.chat.id, message_id=call.message.message_id)
+
 
 
 
